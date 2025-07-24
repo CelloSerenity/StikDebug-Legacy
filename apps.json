@@ -44,17 +44,9 @@
       },
       "versions": [
         {
-          "version": "1.3.3",
-          "date": "2025-04-17",
-          "localizedDescription": "Bug Fixes",
-          "downloadURL": "https://stikdebug.xyz/adp",
-          "size": 5211211,
-          "buildVersion": "1"
-        }
-        {
           "version": "2.0.3",
-          "date": "2025-07-26",
-          "localizedDescription": "Fixed some bugs, added better error handling, and improved the user experience.",
+          "date": "2025-07-25",
+          "localizedDescription": "Will be available as soon as Apple approves the update. Fixed some bugs, added better error handling, and improved the user experience.",
           "downloadURL": "https://stikdebug.xyz/adp",
           "size": 5211211,
           "buildVersion": "1"
