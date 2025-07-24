@@ -54,7 +54,7 @@
         {
           "version": "2.0.3",
           "date": "2025-07-26",
-          "localizedDescription": "Bug Fixes",
+          "localizedDescription": "Fixed some bugs, added better error handling, and improved the user experience.",
           "downloadURL": "https://stikdebug.xyz/adp",
           "size": 5211211,
           "buildVersion": "1"
