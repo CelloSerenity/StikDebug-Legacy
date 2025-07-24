@@ -51,6 +51,14 @@
           "size": 5211211,
           "buildVersion": "1"
         }
+        {
+          "version": "2.0.3",
+          "date": "2025-07-26",
+          "localizedDescription": "Bug Fixes",
+          "downloadURL": "https://stikdebug.xyz/adp",
+          "size": 5211211,
+          "buildVersion": "1"
+        }
       ]
     }
   ]
