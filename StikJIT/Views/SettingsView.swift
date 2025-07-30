@@ -302,6 +302,13 @@ struct SettingsView: View {
                                                if !newValue {
                                                    useDefaultScript = false
                                                    enablePiP = false
+                                                   enableAdvancedBetaOptions = false
+                                                   enableTesting = false
+                                               }
+                                           }
+                                           .onChange(of: enableAdvancedBetaOptions) { _, newValue in
+                                               if !newValue {
+                                                   enableTesting = false
                                                }
                                            }
                                        }
