@@ -395,7 +395,7 @@ struct IPAAppManagerView: View {
                     .foregroundColor(.primary)
                 
                 VStack(spacing: 10) {
-                    importButton(label: mgr.ipaName ?? "Self Developed Application Archive File",
+                    importButton(label: mgr.ipaName ?? ".IPA File",
                                  icon: "arrow.down.doc",
                                  imported: mgr.ipaURL != nil) { pickerShown = true }
                     

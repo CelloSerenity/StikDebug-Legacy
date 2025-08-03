@@ -84,8 +84,6 @@ func isMounted() -> Bool {
         return false
     }
     idevice_provider_free(provider)
-
-    print("wow")
     
     var devices: UnsafeMutableRawPointer?
     var devicesLen: size_t = 0
