@@ -9,38 +9,48 @@ import UIKit
 
 struct SettingsView: View {
     @AppStorage("username") private var username = "User"
-    @AppStorage("customAccentColor") private var customAccentColorHex: String = ""
     @AppStorage("selectedAppIcon") private var selectedAppIcon: String = "AppIcon"
     @AppStorage("useDefaultScript") private var useDefaultScript = false
     @AppStorage("enableAdvancedOptions") private var enableAdvancedOptions = false
     @AppStorage("enableAdvancedBetaOptions") private var enableAdvancedBetaOptions = false
     @AppStorage("enableTesting") private var enableTesting = false
     @AppStorage("enablePiP") private var enablePiP = false
-
+    @AppStorage("customAccentColor") private var customAccentColorHex: String = ""
+    @AppStorage("appTheme") private var appThemeRaw: String = AppTheme.system.rawValue
+    @Environment(\.themeExpansionManager) private var themeExpansion
+    private var backgroundStyle: BackgroundStyle { themeExpansion?.backgroundStyle(for: appThemeRaw) ?? AppTheme.system.backgroundStyle }
+    private var preferredScheme: ColorScheme? { themeExpansion?.preferredColorScheme(for: appThemeRaw) }
+    
     @State private var isShowingPairingFilePicker = false
     @Environment(\.colorScheme) private var colorScheme
 
-    @State private var selectedAccentColor: Color = .blue
     @State private var showIconPopover = false
     @State private var showPairingFileMessage = false
-    @State private var pairingFileIsValid = false
     @State private var isImportingFile = false
     @State private var importProgress: Float = 0.0
+    @State private var pairingStatusMessage: String? = nil
+    @State private var showRemovePairingFileDialog = false
     @State private var is_lc = false
     @State private var showColorPickerPopup = false
-    
-    @StateObject private var mountProg = MountingProgress.shared
-    
-    @State private var mounted = false
-    
-    @State private var showingConsoleLogsView = false
+
     @State private var showingDisplayView = false
     
     private var appVersion: String {
         let marketingVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         return marketingVersion
     }
+    
+    private var accentColor: Color {
+        themeExpansion?.resolvedAccentColor(from: customAccentColorHex) ?? .blue
+    }
 
+    private var currentThemeName: String {
+        AppTheme(rawValue: appThemeRaw)?.displayName ?? "Default"
+    }
+
+    private var accentColorDescription: String {
+        customAccentColorHex.isEmpty ? "System Blue" : customAccentColorHex.uppercased()
+    }
     // Developer profile image URLs
     private let developerProfiles: [String: String] = [
         "Stephen": "https://github.com/StephenDev0.png",
@@ -52,460 +62,88 @@ struct SettingsView: View {
         "Wynwxst": "https://github.com/Wynwxst.png"
     ]
 
-    private var accentColor: Color {
-        if customAccentColorHex.isEmpty {
-            return .blue
-        } else {
-            return Color(hex: customAccentColorHex) ?? .blue
-        }
-    }
-
     var body: some View {
-        ZStack {
-            Color(UIColor.systemBackground)
-                .ignoresSafeArea()
-            
-            ScrollView {
-                VStack(spacing: 12) {
-                    // App Logo and Username Section
-                    VStack(spacing: 16) {
-                        VStack {
-                            Image("StikJIT")
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 80, height: 80)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                                )
-                        }
-                        .padding(.top, 16)
-                        
-                        Text("StikDebug")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
+        NavigationStack {
+            ZStack {
+                // Subtle depth gradient background
+                ThemedBackground(style: backgroundStyle)
+                    .ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 20) {
+                        headerCard
+                        appearanceCard
+                        pairingCard
+                        behaviorCard
+                        advancedCard
+                        helpCard
+                        versionInfo
                     }
-                    
-                    Divider()
-                        .padding(.horizontal, 16)
-                        .opacity(0.6)
-                    
-                    // Appearance section
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Appearance")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            VStack(spacing: 6) {
-                                Button(action: {
-                                    showingDisplayView = true
-                                }) {
-                                    HStack {
-                                        Image(systemName: "paintbrush")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Text("Display")
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(accentColor)
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                    }
-                    
-                    // Pairing File section
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Pairing File")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            Button {
-                                isShowingPairingFilePicker = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "doc.badge.plus")
-                                        .font(.system(size: 18))
-                                    Text("Import New Pairing File")
-                                        .fontWeight(.medium)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .foregroundColor(accentColor.contrastText())
-                                .background(accentColor)
-                                .cornerRadius(12)
-                            }
-                            
-                            if isImportingFile {
-                                VStack(spacing: 10) {
-                                    HStack {
-                                        Text("Processing pairing file...")
-                                            .font(.system(.caption, design: .rounded))
-                                            .foregroundColor(.secondary)
-                                        Spacer()
-                                        Text("\(Int(importProgress * 100))%")
-                                            .font(.system(.caption, design: .rounded))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    GeometryReader { geometry in
-                                        ZStack(alignment: .leading) {
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color(UIColor.tertiarySystemFill))
-                                                .frame(height: 10)
-                                            
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color.green)
-                                                .frame(width: geometry.size.width * CGFloat(importProgress), height: 10)
-                                                .animation(.linear(duration: 0.3), value: importProgress)
-                                        }
-                                    }
-                                    .frame(height: 10)
-                                }
-                                .padding(.top, 6)
-                            }
-                            
-                            if showPairingFileMessage && pairingFileIsValid {
-                                HStack {
-                                    Spacer()
-                                    Text("✓ Pairing file successfully imported")
-                                        .font(.system(.callout, design: .rounded))
-                                        .foregroundColor(.green)
-                                        .padding(.vertical, 10)
-                                        .padding(.horizontal, 18)
-                                        .background(Color.green.opacity(0.1))
-                                        .cornerRadius(10)
-                                    Spacer()
-                                }
-                                .padding(.top, 6)
-                                .transition(
-                                    .asymmetric(
-                                        insertion: .scale(scale: 0.9)
-                                            .combined(with: .opacity)
-                                            .animation(.spring(response: 0.4, dampingFraction: 0.7)),
-                                        removal: .opacity.animation(.easeOut(duration: 0.25))
-                                    )
-                                )
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                    }
-                    
-                    // Developer Disk Image section
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Developer Disk Image")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            // Status indicator with icon
-                            HStack(spacing: 12) {
-                                Image(systemName: mounted || (mountProg.mountProgress == 100) ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(mounted || (mountProg.mountProgress == 100) ? .green : .red)
-                                
-                                Text(mounted || (mountProg.mountProgress == 100) ? "Successfully Mounted" : "Not Mounted")
-                                    .font(.system(.body, design: .rounded))
-                                    .fontWeight(.medium)
-                            }
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(UIColor.tertiarySystemBackground))
-                            .cornerRadius(12)
-                            
-                            if !(mounted || (mountProg.mountProgress == 100)) {
-                                Text("Import pairing file and restart the app to mount DDI")
-                                    .font(.system(.caption, design: .rounded))
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 4)
-                            }
-                            
-                            if mountProg.mountProgress > 0 && mountProg.mountProgress < 100 && !mounted {
-                                VStack(spacing: 8) {
-                                    HStack {
-                                        Text("Mounting in progress...")
-                                            .font(.system(.caption, design: .rounded))
-                                            .foregroundColor(.secondary)
-                                        Spacer()
-                                        Text("\(Int(mountProg.mountProgress))%")
-                                            .font(.system(.caption, design: .rounded))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    GeometryReader { geometry in
-                                        ZStack(alignment: .leading) {
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color(UIColor.tertiarySystemFill))
-                                                .frame(height: 8)
-                                            
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color.green)
-                                                .frame(width: geometry.size.width * CGFloat(mountProg.mountProgress / 100.0), height: 8)
-                                                .animation(.linear(duration: 0.3), value: mountProg.mountProgress)
-                                        }
-                                    }
-                                    .frame(height: 8)
-                                }
-                                .padding(.top, 6)
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                        .onAppear {
-                            self.mounted = isMounted()
-                        }
-                    }
-                    SettingsCard {
-                                           VStack(alignment: .leading, spacing: 20) {
-                                               Text("Behavior")
-                                                   .font(.headline)
-                                                   .foregroundColor(.primary)
-                                                   .padding(.bottom, 4)
-                                               
-                                                   Toggle("Run Default Script After Connecting", isOn: $useDefaultScript)
-                                                       .foregroundColor(.primary)
-                                                       .padding(.vertical, 6)
-                                                   Toggle("Picture in Picture", isOn: $enablePiP)
-                                                       .foregroundColor(.primary)
-                                                       .padding(.vertical, 6)
-                                           }
-                                           .padding(.vertical, 20)
-                                           .padding(.horizontal, 16)
-                                           .onChange(of: enableAdvancedOptions) { _, newValue in
-                                               if !newValue {
-                                                   useDefaultScript = false
-                                                   enablePiP = false
-                                                   enableAdvancedBetaOptions = false
-                                                   enableTesting = false
-                                               }
-                                           }
-                                           .onChange(of: enableAdvancedBetaOptions) { _, newValue in
-                                               if !newValue {
-                                                   enableTesting = false
-                                               }
-                                           }
-                                       }
-                                       
-                    // About section
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("About")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Creators")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                
-                                HStack(spacing: 16) {
-                                    VStack(spacing: 8) {
-                                        ProfileImage(url: developerProfiles["Stephen"] ?? "")
-                                            .frame(width: 60, height: 60)
-                                        
-                                        Text("Stephen")
-                                            .fontWeight(.semibold)
-                                        
-                                        Text("App Creator")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .frame(minWidth: 0, maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .padding(.horizontal, 16)
-                                    .background(Color(UIColor.tertiarySystemBackground))
-                                    .cornerRadius(12)
-                                    .onTapGesture {
-                                        if let url = URL(string: "https://github.com/StephenDev0") {
-                                            UIApplication.shared.open(url)
-                                        }
-                                    }
-                                    
-                                    VStack(spacing: 8) {
-                                        ProfileImage(url: developerProfiles["jkcoxson"] ?? "")
-                                            .frame(width: 60, height: 60)
-                                        
-                                        Text("jkcoxson")
-                                            .fontWeight(.semibold)
-                                        
-                                        Text("idevice & em_proxy")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .frame(minWidth: 0, maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .padding(.horizontal, 16)
-                                    .background(Color(UIColor.tertiarySystemBackground))
-                                    .cornerRadius(12)
-                                    .onTapGesture {
-                                        if let url = URL(string: "https://jkcoxson.com/") {
-                                            UIApplication.shared.open(url)
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            Divider()
-                                .padding(.vertical, 8)
-                            
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Developers")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                
-                                VStack(spacing: 12) {
-                                    CollaboratorRow(name: "Stossy11", url: "https://github.com/Stossy11", imageUrl: developerProfiles["Stossy11"] ?? "")
-                                    CollaboratorRow(name: "Neo", url: "https://neoarz.xyz/", imageUrl: developerProfiles["Neo"] ?? "")
-                                    CollaboratorRow(name: "Se2crid", url: "https://github.com/Se2crid", imageUrl: developerProfiles["Se2crid"] ?? "")
-                                    CollaboratorRow(name: "Huge_Black", url: "https://github.com/HugeBlack", imageUrl: developerProfiles["Huge_Black"] ?? "")
-                                    CollaboratorRow(name: "Wynwxst", url: "https://github.com/Wynwxst", imageUrl: developerProfiles["Wynwxst"] ?? "")
-                                }
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                    }
-                    .padding(.bottom, 4)
-                    
-                    // Advanced Settings Card
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Advanced")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            VStack(spacing: 6) {
-                                Button(action: {
-                                    showingConsoleLogsView = true
-                                }) {
-                                    HStack {
-                                        Image(systemName: "terminal")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Text("System Logs")
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(accentColor)
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                                
-                                Button(action: {
-                                    openAppFolder()
-                                }) {
-                                    HStack {
-                                        Image(systemName: "folder")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Text("App Folder")
-                                            .foregroundColor(.primary.opacity(0.8))
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(accentColor)
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                    }
-                    .padding(.bottom, 4)
-                    .sheet(isPresented: $showingConsoleLogsView) {
-                        ConsoleLogsView()
-                    }
-                    .sheet(isPresented: $showingDisplayView) {
-                        DisplayView()
-                    }
-                    
-                    // Combined Help Section (User Manual and VPN Help)
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Help")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.bottom, 4)
-                            
-                            Button(action: {
-                                if let url = URL(string: "https://github.com/StephenDev0/StikDebug-Guide/blob/main/pairing_file.md") {
-                                    UIApplication.shared.open(url)
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: "questionmark.circle")
-                                        .font(.system(size: 18))
-                                        .foregroundColor(.primary.opacity(0.8))
-                                    Text("Pairing File Guide")
-                                        .foregroundColor(.primary.opacity(0.8))
-                                    Spacer()
-                                }
-                                .padding(.vertical, 8)
-                            }
-                            
-                            Button(action: {
-                                if let url = URL(string: "https://discord.gg/qahjXNTDwS") {
-                                    UIApplication.shared.open(url)
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: "questionmark.circle")
-                                        .font(.system(size: 18))
-                                        .foregroundColor(.primary.opacity(0.8))
-                                    Text("Need support? Join the Discord!")
-                                        .foregroundColor(.primary.opacity(0.8))
-                                    Spacer()
-                                }
-                                .padding(.vertical, 8)
-                            }
-                            
-                            HStack(alignment: .center, spacing: 8) {
-                                Image(systemName: "shield.slash")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(.primary.opacity(0.8))
-                                Text("You can turn off the VPN in the Settings app.")
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 16)
-                        .frame(maxWidth: .infinity) // Ensures this card fills the available width
-                    }
-                    
-                    // Version info
-                    HStack {
-                        Spacer()
-                        
-                        Text("Version \(appVersion) • iOS \(UIDevice.current.systemVersion)")
-                            .font(.footnote)
-                            .foregroundColor(.secondary.opacity(0.8))
-                        
-                        Spacer()
-                    }
-                    .padding(.top, 8)
-                    .padding(.bottom, 16)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 30)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 20)
+                
+                // Busy overlay while importing pairing file
+                if isImportingFile {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView("Processing pairing file…")
+                        VStack(spacing: 8) {
+                            GeometryReader { geometry in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color(UIColor.tertiarySystemFill))
+                                        .frame(height: 8)
+                                    
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.green)
+                                        .frame(width: geometry.size.width * CGFloat(importProgress), height: 8)
+                                        .animation(.linear(duration: 0.3), value: importProgress)
+                                }
+                            }
+                            .frame(height: 8)
+                            Text("\(Int(importProgress * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 6)
+                    }
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                            )
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
+                }
+                
+                // Success toast after import
+                if let pairingStatusMessage,
+                   showPairingFileMessage,
+                   !isImportingFile {
+                    VStack {
+                        Spacer()
+                        Text(pairingStatusMessage)
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 3)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .padding(.bottom, 30)
+                    }
+                    .animation(.easeInOut(duration: 0.25), value: showPairingFileMessage)
+                }
             }
+            .navigationTitle("Settings")
         }
+        // Match controls to the active accent color (defaults to blue)
+        .tint(accentColor)
+        .preferredColorScheme(preferredScheme)
         .fileImporter(
             isPresented: $isShowingPairingFilePicker,
             allowedContentTypes: [UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data)!, .propertyList],
@@ -530,7 +168,8 @@ struct SettingsView: View {
                         DispatchQueue.main.async {
                             isImportingFile = true
                             importProgress = 0.0
-                            pairingFileIsValid = false
+                            pairingStatusMessage = nil
+                            showPairingFileMessage = false
                         }
                         
                         let progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
@@ -540,17 +179,6 @@ struct SettingsView: View {
                                 } else {
                                     timer.invalidate()
                                     isImportingFile = false
-                                    pairingFileIsValid = true
-                                    
-                                    withAnimation {
-                                        showPairingFileMessage = true
-                                    }
-                                    
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                                        withAnimation {
-                                            showPairingFileMessage = false
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -572,23 +200,261 @@ struct SettingsView: View {
                 print("Failed to import file: \(error)")
             }
         }
-        .onAppear {
-            loadCustomAccentColor()
+    }
+    
+    // MARK: - Cards
+    
+    private var headerCard: some View {
+        glassCard {
+            VStack(spacing: 16) {
+                VStack {
+                    Image("StikJIT")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 80, height: 80)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                }
+                Text("StikDebug")
+                    .font(.title2.weight(.semibold))
+                    .foregroundColor(.primary)
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
     
-    private func loadCustomAccentColor() {
-        if customAccentColorHex.isEmpty {
-            selectedAccentColor = .blue
-        } else {
-            selectedAccentColor = Color(hex: customAccentColorHex) ?? .blue
+    private var appearanceCard: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Appearance")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+
+                HStack(spacing: 14) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(accentColor)
+                        .frame(width: 44, height: 44)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(currentThemeName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.primary)
+                        Text("Accent · \(accentColorDescription)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+
+                Button(action: { showingDisplayView = true }) {
+                    HStack {
+                        Image(systemName: "paintbrush")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary.opacity(0.85))
+                        Text("Customize Display")
+                            .foregroundColor(.primary.opacity(0.85))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+            .padding(4)
+        }
+        .sheet(isPresented: $showingDisplayView) {
+            if let manager = themeExpansion {
+                DisplayView().themeExpansionManager(manager)
+            } else {
+                DisplayView()
+            }
         }
     }
     
-    private func saveCustomAccentColor(_ color: Color) {
-        customAccentColorHex = color.toHex() ?? ""
+    private var pairingCard: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Pairing File")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Button {
+                    isShowingPairingFilePicker = true
+                } label: {
+                    HStack {
+                        Image(systemName: "doc.badge.plus")
+                            .font(.system(size: 18))
+                        Text("Import New Pairing File")
+                            .fontWeight(.medium)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .foregroundColor(accentColor.contrastText())
+                    .background(accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
+                    )
+                }
+                
+                if showPairingFileMessage && !isImportingFile {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text("Pairing file successfully imported")
+                            .font(.callout)
+                            .foregroundColor(.green)
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                    .transition(.opacity)
+                }
+            }
+        }
     }
     
+    private var behaviorCard: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Behavior")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Toggle("Run Default Script After Connecting", isOn: $useDefaultScript)
+                    .tint(accentColor)
+                Toggle("Picture in Picture", isOn: $enablePiP)
+                    .tint(accentColor)
+            }
+            .onChange(of: enableAdvancedOptions) { _, newValue in
+                if !newValue {
+                    useDefaultScript = false
+                    enablePiP = false
+                    enableAdvancedBetaOptions = false
+                    enableTesting = false
+                }
+            }
+            .onChange(of: enableAdvancedBetaOptions) { _, newValue in
+                if !newValue {
+                    enableTesting = false
+                }
+            }
+        }
+    }
+        
+    private var advancedCard: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Advanced")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Button(action: { openAppFolder() }) {
+                    HStack {
+                        Image(systemName: "folder")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary.opacity(0.8))
+                        Text("App Folder")
+                            .foregroundColor(.primary.opacity(0.8))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+    }
+    
+    private var helpCard: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Help")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Button(action: {
+                    if let url = URL(string: "https://github.com/StephenDev0/StikDebug-Guide/blob/main/pairing_file.md") {
+                        UIApplication.shared.open(url)
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary.opacity(0.8))
+                        Text("Pairing File Guide")
+                            .foregroundColor(.primary.opacity(0.8))
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+                
+                Button(action: {
+                    if let url = URL(string: "https://discord.gg/qahjXNTDwS") {
+                        UIApplication.shared.open(url)
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 18))
+                            .foregroundColor(.primary.opacity(0.8))
+                        Text("Need support? Join the Discord!")
+                            .foregroundColor(.primary.opacity(0.8))
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+                
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: "shield.slash")
+                        .font(.system(size: 18))
+                        .foregroundColor(.primary.opacity(0.8))
+                    Text("You can turn off the VPN in the Settings app.")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+    
+    private var versionInfo: some View {
+        let txmLabel = ProcessInfo.processInfo.hasTXM ? "TXM" : "Non TXM"
+        return HStack {
+            Spacer()
+            Text("Version \(appVersion) • iOS \(UIDevice.current.systemVersion) • \(txmLabel)")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+    
+    // MARK: - Helpers (UI + logic)
+    
+    private func glassCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(20)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                    )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
+    }
+        
     private func changeAppIcon(to iconName: String) {
         selectedAppIcon = iconName
         UIApplication.shared.setAlternateIconName(iconName == "AppIcon" ? nil : iconName) { error in
@@ -671,15 +537,6 @@ struct LinkRow: View {
     var icon: String
     var title: String
     var url: String
-    @AppStorage("customAccentColor") private var customAccentColorHex: String = ""
-    
-    private var accentColor: Color {
-        if customAccentColorHex.isEmpty {
-            return .blue
-        } else {
-            return Color(hex: customAccentColorHex) ?? .blue
-        }
-    }
     
     var body: some View {
         Button(action: {
@@ -693,7 +550,7 @@ struct LinkRow: View {
                 Spacer()
                 Image(systemName: icon)
                     .font(.system(size: 18))
-                    .foregroundColor(accentColor)
+                    .foregroundColor(.white)
                     .frame(width: 24)
             }
         }
@@ -701,125 +558,10 @@ struct LinkRow: View {
     }
 }
 
-struct CollaboratorGridItem: View {
-    var name: String
-    var url: String
-    var imageUrl: String
-    
-    var body: some View {
-        Button(action: {
-            if let url = URL(string: url) {
-                UIApplication.shared.open(url)
-            }
-        }) {
-            VStack(spacing: 8) {
-                ProfileImage(url: imageUrl)
-                    .frame(width: 50, height: 50)
-                Text(name)
-                    .foregroundColor(.primary)
-                    .fontWeight(.medium)
-                    .font(.subheadline)
-            }
-            .frame(minWidth: 80)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
-            .background(Color(UIColor.tertiarySystemBackground))
-            .cornerRadius(12)
-        }
-    }
-}
-
-struct ProfileImage: View {
-    var url: String
-    @State private var image: UIImage?
-    
-    var body: some View {
-        Group {
-            if let image = image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                    )
-            } else {
-                Circle()
-                    .fill(Color(UIColor.systemGray4))
-                    .overlay(
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.white)
-                    )
-                    .onAppear {
-                        loadImage()
-                    }
-            }
-        }
-    }
-    
-    private func loadImage() {
-        guard let imageUrl = URL(string: url) else { return }
-        URLSession.shared.dataTask(with: imageUrl) { data, response, error in
-            if let data = data, let downloadedImage = UIImage(data: data) {
-                DispatchQueue.main.async {
-                    self.image = downloadedImage
-                }
-            }
-        }.resume()
-    }
-}
-
-struct CollaboratorRow: View {
-    var name: String
-    var url: String
-    var imageUrl: String
-    var quote: String?
-    @AppStorage("customAccentColor") private var customAccentColorHex: String = ""
-    
-    private var accentColor: Color {
-        if customAccentColorHex.isEmpty {
-            return .blue
-        } else {
-            return Color(hex: customAccentColorHex) ?? .blue
-        }
-    }
-    
-    var body: some View {
-        Button(action: {
-            if let url = URL(string: url) {
-                UIApplication.shared.open(url)
-            }
-        }) {
-            HStack(spacing: 12) {
-                ProfileImage(url: imageUrl)
-                    .frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .foregroundColor(.primary)
-                        .fontWeight(.medium)
-                    if let quote = quote {
-                        Text("“\(quote)”")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                Spacer()
-                Image(systemName: "link")
-                    .font(.system(size: 16))
-                    .foregroundColor(accentColor)
-            }
-            .padding(.vertical, 8)
-        }
-    }
-}
-
 struct ConsoleLogsView_Preview: PreviewProvider {
     static var previews: some View {
         ConsoleLogsView()
+            .themeExpansionManager(ThemeExpansionManager(previewUnlocked: true))
     }
 }
 

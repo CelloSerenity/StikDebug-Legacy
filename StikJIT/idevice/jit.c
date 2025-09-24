@@ -112,8 +112,10 @@ int debug_app(IdeviceProviderHandle* tcp_provider, const char *bundle_id, LogFun
       fprintf(stderr, "Failed to create TCP adapter: [%d] %s\n", err->code,
               err->message);
       idevice_error_free(err);
+      core_device_proxy_free(core_device);
       return 1;
     }
+    core_device = NULL; // adapter takes ownership of the proxy
 
     AdapterStreamHandle *stream = NULL;
     err = adapter_connect(adapter, rsd_port, (ReadWriteOpaque **)&stream);
@@ -138,6 +140,7 @@ int debug_app(IdeviceProviderHandle* tcp_provider, const char *bundle_id, LogFun
       adapter_free(adapter);
       return 1;
     }
+    stream = NULL;
     
     // Create RemoteServerClient
     RemoteServerHandle *remote_server = NULL;
@@ -237,8 +240,10 @@ int debug_app_pid(IdeviceProviderHandle* tcp_provider, int pid, LogFuncC logger,
       fprintf(stderr, "Failed to create TCP adapter: [%d] %s\n", err->code,
               err->message);
       idevice_error_free(err);
+      core_device_proxy_free(core_device);
       return 1;
     }
+    core_device = NULL;
 
     AdapterStreamHandle *stream = NULL;
     err = adapter_connect(adapter, rsd_port, (ReadWriteOpaque **)&stream);
@@ -263,6 +268,7 @@ int debug_app_pid(IdeviceProviderHandle* tcp_provider, int pid, LogFuncC logger,
       adapter_free(adapter);
       return 1;
     }
+    stream = NULL;
     
     // Create RemoteServerClient
     RemoteServerHandle *remote_server = NULL;
@@ -301,4 +307,116 @@ int debug_app_pid(IdeviceProviderHandle* tcp_provider, int pid, LogFuncC logger,
     
     logger("Debug session completed");
     return 0;
+}
+
+int launch_app_via_proxy(IdeviceProviderHandle* tcp_provider, const char *bundle_id, LogFuncC logger) {
+    idevice_init_logger(Info, Disabled, NULL);
+    IdeviceFfiError* err = NULL;
+
+    CoreDeviceProxyHandle *core_device = NULL;
+    AdapterHandle *adapter = NULL;
+    AdapterStreamHandle *stream = NULL;
+    RsdHandshakeHandle *handshake = NULL;
+    RemoteServerHandle *remote_server = NULL;
+    ProcessControlHandle *process_control = NULL;
+    uint64_t pid = 0;
+    int result = 1;
+
+    err = core_device_proxy_connect(tcp_provider, &core_device);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to connect to CoreDeviceProxy: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+
+    uint16_t rsd_port = 0;
+    err = core_device_proxy_get_server_rsd_port(core_device, &rsd_port);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to get server RSD port: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+
+    err = core_device_proxy_create_tcp_adapter(core_device, &adapter);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to create TCP adapter: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+    core_device = NULL; // ownership transferred to adapter
+
+    err = adapter_connect(adapter, rsd_port, (ReadWriteOpaque **)&stream);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to connect to RSD port: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+
+    err = rsd_handshake_new((ReadWriteOpaque *)stream, &handshake);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to perform RSD handshake: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+    stream = NULL; // consumed by handshake/adapter stack
+
+    err = remote_server_connect_rsd(adapter, handshake, &remote_server);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to create remote server: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+
+    err = process_control_new(remote_server, &process_control);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to create process control client: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        goto cleanup;
+    }
+
+    err = process_control_launch_app(process_control,
+                                     bundle_id,
+                                     NULL,
+                                     0,
+                                     NULL,
+                                     0,
+                                     false,
+                                     true,
+                                     &pid);
+    if (err != NULL) {
+        fprintf(stderr, "Failed to launch app: [%d] %s\n", err->code, err->message);
+        idevice_error_free(err);
+        if (logger) {
+            logger("Failed to launch app: %s", bundle_id);
+        }
+        goto cleanup;
+    }
+
+    if (logger) {
+        logger("Launched app (PID %llu)", pid);
+    }
+
+    result = 0;
+
+cleanup:
+    if (process_control) {
+        process_control_free(process_control);
+    }
+    if (remote_server) {
+        remote_server_free(remote_server);
+    }
+    if (handshake) {
+        rsd_handshake_free(handshake);
+    }
+    if (stream) {
+        adapter_close(stream);
+    }
+    if (adapter) {
+        adapter_free(adapter);
+    }
+    if (core_device) {
+        core_device_proxy_free(core_device);
+    }
+
+    return result;
 }

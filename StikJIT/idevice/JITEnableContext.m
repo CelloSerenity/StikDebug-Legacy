@@ -20,6 +20,11 @@ JITEnableContext* sharedJITContext = nil;
 @implementation JITEnableContext {
     bool heartbeatRunning;
     IdeviceProviderHandle* provider;
+    dispatch_queue_t syslogQueue;
+    BOOL syslogStreaming;
+    SyslogRelayClientHandle *syslogClient;
+    SyslogLineHandler syslogLineHandler;
+    SyslogErrorHandler syslogErrorHandler;
 }
 
 + (instancetype)shared {
@@ -34,6 +39,9 @@ JITEnableContext* sharedJITContext = nil;
     NSURL* docPathUrl = [fm URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL* logURL = [docPathUrl URLByAppendingPathComponent:@"idevice_log.txt"];
     idevice_init_logger(Info, Debug, (char*)logURL.path.UTF8String);
+    syslogQueue = dispatch_queue_create("com.stik.syslogrelay.queue", DISPATCH_QUEUE_SERIAL);
+    syslogStreaming = NO;
+    syslogClient = NULL;
     return self;
 }
 
@@ -179,6 +187,38 @@ JITEnableContext* sharedJITContext = nil;
     return apps;
 }
 
+- (NSDictionary<NSString*, NSString*>*)getAllAppsWithError:(NSError**)error {
+    if (!provider) {
+        NSLog(@"Provider not initialized!");
+        *error = [self errorWithStr:@"Provider not initialized!" code:-1];
+        return nil;
+    }
+
+    NSString* errorStr = nil;
+    NSDictionary<NSString*, NSString*>* apps = list_all_apps(provider, &errorStr);
+    if (errorStr) {
+        *error = [self errorWithStr:errorStr code:-17];
+        return nil;
+    }
+    return apps;
+}
+
+- (NSDictionary<NSString*, NSString*>*)getHiddenSystemAppsWithError:(NSError**)error {
+    if (!provider) {
+        NSLog(@"Provider not initialized!");
+        *error = [self errorWithStr:@"Provider not initialized!" code:-1];
+        return nil;
+    }
+
+    NSString* errorStr = nil;
+    NSDictionary<NSString*, NSString*>* apps = list_hidden_system_apps(provider, &errorStr);
+    if (errorStr) {
+        *error = [self errorWithStr:errorStr code:-17];
+        return nil;
+    }
+    return apps;
+}
+
 - (UIImage*)getAppIconWithBundleId:(NSString*)bundleId error:(NSError**)error {
     if (!provider) {
         NSLog(@"Provider not initialized!");
@@ -195,7 +235,137 @@ JITEnableContext* sharedJITContext = nil;
     return icon;
 }
 
+- (BOOL)launchAppWithoutDebug:(NSString*)bundleID logger:(LogFunc)logger {
+    if (!provider) {
+        if (logger) {
+            logger(@"Provider not initialized!");
+        }
+        NSLog(@"Provider not initialized!");
+        return NO;
+    }
+
+    [self ensureHeartbeat];
+
+    int result = launch_app_via_proxy(provider,
+                                      [bundleID UTF8String],
+                                      [self createCLogger:logger]);
+    return result == 0;
+}
+
+- (void)startSyslogRelayWithHandler:(SyslogLineHandler)lineHandler
+                             onError:(SyslogErrorHandler)errorHandler
+{
+    if (!provider) {
+        if (errorHandler) {
+            errorHandler([self errorWithStr:@"Provider not initialized!" code:-1]);
+        }
+        return;
+    }
+    if (!lineHandler || syslogStreaming) {
+        return;
+    }
+
+    syslogStreaming = YES;
+    syslogLineHandler = [lineHandler copy];
+    syslogErrorHandler = [errorHandler copy];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(syslogQueue, ^{
+        __strong typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) { return; }
+
+        [strongSelf ensureHeartbeat];
+
+        SyslogRelayClientHandle *client = NULL;
+        IdeviceFfiError *err = syslog_relay_connect_tcp(strongSelf->provider, &client);
+        if (err != NULL) {
+            NSString *message = err->message ? [NSString stringWithCString:err->message encoding:NSASCIIStringEncoding] : @"Failed to connect to syslog relay";
+            NSError *nsError = [strongSelf errorWithStr:message code:err->code];
+            idevice_error_free(err);
+            [strongSelf handleSyslogFailure:nsError];
+            return;
+        }
+
+        strongSelf->syslogClient = client;
+
+        while (strongSelf && strongSelf->syslogStreaming) {
+            char *message = NULL;
+            IdeviceFfiError *nextErr = syslog_relay_next(client, &message);
+            if (nextErr != NULL) {
+                NSString *errMsg = nextErr->message ? [NSString stringWithCString:nextErr->message encoding:NSASCIIStringEncoding] : @"Syslog relay read failed";
+                NSError *nsError = [strongSelf errorWithStr:errMsg code:nextErr->code];
+                idevice_error_free(nextErr);
+                if (message) { idevice_string_free(message); }
+                [strongSelf handleSyslogFailure:nsError];
+                client = NULL;
+                break;
+            }
+
+            if (!message) {
+                continue;
+            }
+
+            NSString *line = [NSString stringWithCString:message encoding:NSUTF8StringEncoding];
+            idevice_string_free(message);
+            if (!line || !strongSelf->syslogLineHandler) {
+                continue;
+            }
+
+            SyslogLineHandler handlerCopy = strongSelf->syslogLineHandler;
+            if (handlerCopy) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    handlerCopy(line);
+                });
+            }
+        }
+
+        if (client) {
+            syslog_relay_client_free(client);
+        }
+
+        strongSelf->syslogClient = NULL;
+        strongSelf->syslogStreaming = NO;
+        strongSelf->syslogLineHandler = nil;
+        strongSelf->syslogErrorHandler = nil;
+    });
+}
+
+- (void)stopSyslogRelay {
+    if (!syslogStreaming) {
+        return;
+    }
+
+    syslogStreaming = NO;
+    syslogLineHandler = nil;
+    syslogErrorHandler = nil;
+
+    dispatch_async(syslogQueue, ^{
+        if (self->syslogClient) {
+            syslog_relay_client_free(self->syslogClient);
+            self->syslogClient = NULL;
+        }
+    });
+}
+
+- (void)handleSyslogFailure:(NSError *)error {
+    syslogStreaming = NO;
+    if (syslogClient) {
+        syslog_relay_client_free(syslogClient);
+        syslogClient = NULL;
+    }
+    SyslogErrorHandler errorCopy = syslogErrorHandler;
+    syslogLineHandler = nil;
+    syslogErrorHandler = nil;
+
+    if (errorCopy) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            errorCopy(error);
+        });
+    }
+}
+
 - (void)dealloc {
+    [self stopSyslogRelay];
     if (provider) {
         idevice_provider_free(provider);
     }
